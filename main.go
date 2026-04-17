@@ -114,13 +114,23 @@ func main() {
 	builder.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?")
 
 	finalText := builder.String()
-	fmt.Println(finalText)
 
-	err = clipboard.WriteAll(finalText)
-	if err != nil {
-		fmt.Println("\n--- Failed to copy to clipboard. Printing output instead ---")
-	} else {
-		fmt.Println("Successfully generated context and copied to clipboard!")
-		fmt.Println("You can now press Ctrl+V / Cmd+V in your AI chat.")
+	fmt.Println("\n================ GENERATED CONTEXT ================")
+	fmt.Println(finalText)
+	fmt.Println("===================================================")
+
+	fmt.Print("\nDo you want to copy the result to clipboard? (Y/n): ")
+	confirmReader := bufio.NewReader(os.Stdin)
+	copyInput, _ := confirmReader.ReadString('\n')
+	copyInput = strings.TrimSpace(strings.ToLower(copyInput))
+
+	if copyInput == "" || copyInput == "y" || copyInput == "yes" {
+		err = clipboard.WriteAll(finalText)
+		if err != nil {
+			fmt.Println("\n--- Failed to copy to clipboard. Printing output instead ---")
+		} else {
+			fmt.Println("Successfully generated context and copied to clipboard!")
+			fmt.Println("You can now press Ctrl+V / Cmd+V in your AI chat.")
+		}
 	}
 }
