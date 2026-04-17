@@ -44,29 +44,21 @@ Specify what you want the AI to do right in the command.
 
 - Mac/Linux:
     ```bash
-    ai-context -task "add login api" | pbcopy
+    ai-context -task "add login api"
     ```
 
 - Window:
     ```bash
-    ai-context -task "add login api" | clip
+    ai-context -task "add login api"
     ```
 
 ### Method 2: Interactive Mode
 If you have a longer task or just want to run the command quickly, type the command without flags. The program will prompt you for your task.
 
-- Mac/Linux:
+- Mac/Linux/Windows:
     ```bash
-    ai-context | pbcopy
+    ai-context
     ```
-
-- Windows:
-    ```bash
-    ai-context | clip
-    ```
-
-(When you hit Enter, the terminal will wait and ask: What is your task?:. Type your task, press Enter again, and the generated context will be instantly sent to your clipboard.)
-
 ---
 
 ## Output Example
