@@ -59,44 +59,47 @@ func main() {
 	flag.Parse()
 
 	task := *taskPtr
+	includes := strings.TrimSpace(*includePtr)
+	var builder strings.Builder
 
-	if task == "" {
+	if task == "" && includes == "" {
 		fmt.Print("What is your task?: ")
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
 		task = strings.TrimSpace(input)
+		
+		if task == "" {
+			fmt.Println("Error: Task cannot be empty when files are included.")
+			os.Exit(1)
+		}
 	}
 
-	if task == "" {
-		task = "analyze the code and suggest improvements"
-	}
+	if task != "" {
+		ignoreDirs := loadGitignore()
 
-	ignoreDirs := loadGitignore()
+		builder.WriteString("Here is the project structure:\n")
 
-	var builder strings.Builder
-	builder.WriteString("Here is the project structure:\n")
+		err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
 
-	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+			if d.IsDir() && ignoreDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+
+			depth := strings.Count(path, string(os.PathSeparator))
+			indent := strings.Repeat("  ", depth)
+			builder.WriteString(fmt.Sprintf("%s- %s\n", indent, d.Name()))
+			return nil
+		})
+
 		if err != nil {
-			return err
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
 		}
-
-		if d.IsDir() && ignoreDirs[d.Name()] {
-			return filepath.SkipDir
-		}
-
-		depth := strings.Count(path, string(os.PathSeparator))
-		indent := strings.Repeat("  ", depth)
-		builder.WriteString(fmt.Sprintf("%s- %s\n", indent, d.Name()))
-		return nil
-	})
-
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
 	}
 
-	includes := strings.TrimSpace(*includePtr)
 	if includes != "" {
 		filesToInclude := strings.Split(includes, ",")
 		for _, fileName := range filesToInclude {
@@ -125,7 +128,7 @@ func main() {
 	copyInput = strings.TrimSpace(strings.ToLower(copyInput))
 
 	if copyInput == "" || copyInput == "y" || copyInput == "yes" {
-		err = clipboard.WriteAll(finalText)
+		err := clipboard.WriteAll(finalText)
 		if err != nil {
 			fmt.Println("\n--- Failed to copy to clipboard. Printing output instead ---")
 		} else {
