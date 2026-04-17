@@ -1,0 +1,22 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+ai-context
+
+vendor/
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# VSCode
+.vscode/

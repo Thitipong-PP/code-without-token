@@ -7,10 +7,42 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/atotto/clipboard"
 )
 
+// Load .gitignore entries into a map for quick lookup
+func loadGitignore() map[string]bool {
+	ignoreMap := map[string]bool{
+		".git":         true,
+		"node_modules": true,
+		".next":        true,
+		"dist":         true,
+		"build":        true,
+	}
+
+	file, err := os.Open(".gitignore")
+	if err != nil {
+		return ignoreMap
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.Trim(line, "/")
+		ignoreMap[line] = true
+	}
+	return ignoreMap
+}
+
 func main() {
+	// Input handling
 	taskPtr := flag.String("task", "", "What you want the AI to do (e.g. -task \"add user auth\")")
+	includePtr := flag.String("include", "", "Comma-separated files to include content from (e.g. main.go,utils.go)")
 	flag.Parse()
 
 	task := *taskPtr
@@ -26,12 +58,7 @@ func main() {
 		task = "analyze the code and suggest improvements"
 	}
 
-	ignoreDirs := map[string]bool{
-		".git":         true,
-		"node_modules": true,
-		".next":        true,
-		"dist":         true,
-	}
+	ignoreDirs := loadGitignore()
 
 	var builder strings.Builder
 	builder.WriteString("Here is the project structure:\n")
@@ -53,11 +80,34 @@ func main() {
 
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
-		return
+		os.Exit(1)
+	}
+
+	includes := strings.TrimSpace(*includePtr)
+	if includes != "" {
+		filesToInclude := strings.Split(includes, ",")
+		for _, fileName := range filesToInclude {
+			cleanFileName := strings.TrimSpace(fileName)
+			content, err := os.ReadFile(cleanFileName)
+			if err == nil {
+				builder.WriteString(fmt.Sprintf("\n\n--- Content of %s ---\n```\n%s\n```\n", cleanFileName, string(content)))
+			} else {
+				fmt.Printf(" Warning: Could not read file '%s'\n", cleanFileName)
+			}
+		}
 	}
 
 	builder.WriteString(fmt.Sprintf("\nCurrently, I am working on this project. I want to: %s.\n", task))
 	builder.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?")
 
-	fmt.Println(builder.String())
+	finalText := builder.String()
+	fmt.Println(finalText)
+
+	err = clipboard.WriteAll(finalText)
+	if err != nil {
+		fmt.Println("\n--- Failed to copy to clipboard. Printing output instead ---")
+	} else {
+		fmt.Println("Successfully generated context and copied to clipboard!")
+		fmt.Println("You can now press Ctrl+V / Cmd+V in your AI chat.")
+	}
 }
