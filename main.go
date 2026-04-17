@@ -98,6 +98,9 @@ func main() {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
+
+		builder.WriteString(fmt.Sprintf("\nCurrently, I am working on this project. I want to: %s.\n", task))
+		builder.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?")
 	}
 
 	if includes != "" {
@@ -112,9 +115,6 @@ func main() {
 			}
 		}
 	}
-
-	builder.WriteString(fmt.Sprintf("\nCurrently, I am working on this project. I want to: %s.\n", task))
-	builder.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?")
 
 	finalText := builder.String()
 
