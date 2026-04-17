@@ -43,6 +43,19 @@ func main() {
 	// Input handling
 	taskPtr := flag.String("task", "", "What you want the AI to do (e.g. -task \"add user auth\")")
 	includePtr := flag.String("include", "", "Comma-separated files to include content from (e.g. main.go,utils.go)")
+
+	flag.Usage = func() {
+		fmt.Println("CODE WITHOUT TOKEN: Generate project context for AI assistance")
+		fmt.Println("\nUsage:")
+		fmt.Println("  ai-context [flags] (or run without flags for Interactive Mode)")
+		fmt.Println("\nExamples:")
+		fmt.Println("  ai-context")
+		fmt.Println("  ai-context -task \"add login api\"")
+		fmt.Println("  ai-context -task \"fix bug\" -include \"main.go,go.mod\"")
+		fmt.Println("\nFlags:")
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 
 	task := *taskPtr
