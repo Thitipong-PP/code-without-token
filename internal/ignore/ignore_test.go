@@ -32,13 +32,19 @@ func writeFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+// shouldIgnore is a test helper that calls ShouldIgnore with name as both path and name
+// for cases where we only care about bare-name matching.
+func shouldIgnoreName(r *Rules, name string) bool {
+	return r.ShouldIgnore(name, name)
+}
+
 // --- Defaults ---
 
 func TestDefaultsAlwaysIgnored(t *testing.T) {
 	tempDir(t)
 	r := Load()
 	for _, name := range defaultIgnored {
-		if !r.ShouldIgnore(name) {
+		if !shouldIgnoreName(r, name) {
 			t.Errorf("expected %q to be ignored by default", name)
 		}
 	}
@@ -47,10 +53,10 @@ func TestDefaultsAlwaysIgnored(t *testing.T) {
 func TestNoIgnoreFilesPresent(t *testing.T) {
 	tempDir(t)
 	r := Load()
-	if !r.ShouldIgnore(".git") {
+	if !shouldIgnoreName(r, ".git") {
 		t.Error("expected .git to be ignored")
 	}
-	if r.ShouldIgnore("main.go") {
+	if shouldIgnoreName(r, "main.go") {
 		t.Error("main.go should not be ignored")
 	}
 }
@@ -62,7 +68,7 @@ func TestExactNameFromGitignore(t *testing.T) {
 	writeFile(t, dir, ".gitignore", "ai-context\n.DS_Store\nThumbs.db\n")
 	r := Load()
 	for _, name := range []string{"ai-context", ".DS_Store", "Thumbs.db"} {
-		if !r.ShouldIgnore(name) {
+		if !shouldIgnoreName(r, name) {
 			t.Errorf("expected %q to be ignored", name)
 		}
 	}
@@ -73,13 +79,58 @@ func TestExactNameFromAiignore(t *testing.T) {
 	writeFile(t, dir, ".aiignore", "secrets\nlogs\n")
 	r := Load()
 	for _, name := range []string{"secrets", "logs"} {
-		if !r.ShouldIgnore(name) {
+		if !shouldIgnoreName(r, name) {
 			t.Errorf("expected %q to be ignored via .aiignore", name)
 		}
 	}
 }
 
-// --- Glob patterns ---
+// --- Path-based matching (the new behaviour) ---
+
+func TestExactPathFromGitignore(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore\n")
+	r := Load()
+
+	// Full path should match
+	if !r.ShouldIgnore("internal/ignore", "ignore") {
+		t.Error("expected internal/ignore to be ignored by path")
+	}
+	// Bare name alone should NOT match — the rule is path-specific
+	if r.ShouldIgnore("ignore", "ignore") {
+		t.Error("bare name 'ignore' should not match a path-specific rule")
+	}
+}
+
+func TestPathPrefixMatchesChildren(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore\n")
+	r := Load()
+
+	// Files inside the ignored path should also be ignored
+	if !r.ShouldIgnore("internal/ignore/ignore.go", "ignore.go") {
+		t.Error("expected internal/ignore/ignore.go to be ignored (prefix match)")
+	}
+	if !r.ShouldIgnore("internal/ignore/ignore_test.go", "ignore_test.go") {
+		t.Error("expected internal/ignore/ignore_test.go to be ignored (prefix match)")
+	}
+}
+
+func TestGlobPathPattern(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore/*\n")
+	r := Load()
+
+	if !r.ShouldIgnore("internal/ignore/ignore.go", "ignore.go") {
+		t.Error("expected internal/ignore/ignore.go to match internal/ignore/*")
+	}
+	// Sibling directory should NOT match
+	if r.ShouldIgnore("internal/walker/walker.go", "walker.go") {
+		t.Error("internal/walker/walker.go should not match internal/ignore/*")
+	}
+}
+
+// --- Glob patterns (name-based) ---
 
 func TestGlobExePattern(t *testing.T) {
 	dir := tempDir(t)
@@ -88,14 +139,13 @@ func TestGlobExePattern(t *testing.T) {
 
 	hits := []string{"app.exe", "app.exe~", "lib.dll", "lib.so", "lib.dylib"}
 	for _, name := range hits {
-		if !r.ShouldIgnore(name) {
-			t.Errorf("expected %q to be ignored by glob pattern", name)
+		if !shouldIgnoreName(r, name) {
+			t.Errorf("expected %q to be ignored by glob", name)
 		}
 	}
-
 	misses := []string{"main.go", "readme.md", "app.exe.bak"}
 	for _, name := range misses {
-		if r.ShouldIgnore(name) {
+		if shouldIgnoreName(r, name) {
 			t.Errorf("%q should NOT be ignored", name)
 		}
 	}
@@ -106,28 +156,28 @@ func TestGlobFromAiignore(t *testing.T) {
 	writeFile(t, dir, ".aiignore", "*.secret\n*.key\n")
 	r := Load()
 
-	if !r.ShouldIgnore("prod.secret") {
+	if !shouldIgnoreName(r, "prod.secret") {
 		t.Error("expected prod.secret to be ignored")
 	}
-	if !r.ShouldIgnore("id_rsa.key") {
+	if !shouldIgnoreName(r, "id_rsa.key") {
 		t.Error("expected id_rsa.key to be ignored")
 	}
-	if r.ShouldIgnore("main.go") {
+	if shouldIgnoreName(r, "main.go") {
 		t.Error("main.go should not be ignored")
 	}
 }
 
-// --- Directory-style entries (trailing slash stripped) ---
+// --- Directory-style entries ---
 
 func TestDirectoryEntryStripsSlash(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "vendor/\n.vscode/\n")
 	r := Load()
 
-	if !r.ShouldIgnore("vendor") {
+	if !shouldIgnoreName(r, "vendor") {
 		t.Error("expected vendor/ (normalized) to be ignored")
 	}
-	if !r.ShouldIgnore(".vscode") {
+	if !shouldIgnoreName(r, ".vscode") {
 		t.Error("expected .vscode/ (normalized) to be ignored")
 	}
 }
@@ -140,16 +190,16 @@ func TestBothFilesAreMerged(t *testing.T) {
 	writeFile(t, dir, ".aiignore", "secrets\n*.key\n")
 	r := Load()
 
-	if !r.ShouldIgnore("vendor") {
+	if !shouldIgnoreName(r, "vendor") {
 		t.Error("expected vendor from .gitignore")
 	}
-	if !r.ShouldIgnore("app.exe") {
+	if !shouldIgnoreName(r, "app.exe") {
 		t.Error("expected *.exe glob from .gitignore")
 	}
-	if !r.ShouldIgnore("secrets") {
+	if !shouldIgnoreName(r, "secrets") {
 		t.Error("expected secrets from .aiignore")
 	}
-	if !r.ShouldIgnore("prod.key") {
+	if !shouldIgnoreName(r, "prod.key") {
 		t.Error("expected *.key glob from .aiignore")
 	}
 }
@@ -158,10 +208,10 @@ func TestOnlyGitignorePresent(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "vendor\n")
 	r := Load()
-	if !r.ShouldIgnore("vendor") {
+	if !shouldIgnoreName(r, "vendor") {
 		t.Error("expected vendor")
 	}
-	if r.ShouldIgnore("secrets") {
+	if shouldIgnoreName(r, "secrets") {
 		t.Error("secrets should not be ignored")
 	}
 }
@@ -170,10 +220,10 @@ func TestOnlyAiignorePresent(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".aiignore", "secrets\n")
 	r := Load()
-	if !r.ShouldIgnore("secrets") {
+	if !shouldIgnoreName(r, "secrets") {
 		t.Error("expected secrets")
 	}
-	if r.ShouldIgnore("vendor") {
+	if shouldIgnoreName(r, "vendor") {
 		t.Error("vendor should not be ignored")
 	}
 }
@@ -184,10 +234,10 @@ func TestCommentsAndBlankLinesSkipped(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "# Mac\n\n.DS_Store\n")
 	r := Load()
-	if r.ShouldIgnore("# Mac") {
+	if shouldIgnoreName(r, "# Mac") {
 		t.Error("comment should not be an entry")
 	}
-	if !r.ShouldIgnore(".DS_Store") {
+	if !shouldIgnoreName(r, ".DS_Store") {
 		t.Error("expected .DS_Store")
 	}
 }
@@ -196,10 +246,10 @@ func TestDuplicateEntriesAreHarmless(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "vendor\nvendor\n*.exe\n*.exe\n")
 	r := Load()
-	if !r.ShouldIgnore("vendor") {
+	if !shouldIgnoreName(r, "vendor") {
 		t.Error("expected vendor")
 	}
-	if !r.ShouldIgnore("app.exe") {
+	if !shouldIgnoreName(r, "app.exe") {
 		t.Error("expected app.exe")
 	}
 }
@@ -210,7 +260,7 @@ func TestDefaultsNotOverriddenByEmptyFiles(t *testing.T) {
 	writeFile(t, dir, ".aiignore", "")
 	r := Load()
 	for _, name := range defaultIgnored {
-		if !r.ShouldIgnore(name) {
+		if !shouldIgnoreName(r, name) {
 			t.Errorf("default %q should still be ignored", name)
 		}
 	}
@@ -227,9 +277,11 @@ func TestIsPattern(t *testing.T) {
 		{"*.exe~", true},
 		{"file[0].go", true},
 		{"file?.go", true},
+		{"internal/ignore/*", true},
 		{"vendor", false},
 		{".DS_Store", false},
 		{"ai-context", false},
+		{"internal/ignore", false},
 	}
 	for _, c := range cases {
 		if got := isPattern(c.input); got != c.want {

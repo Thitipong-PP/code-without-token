@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// defaultIgnored contains exact names that are always skipped.
 var defaultIgnored = []string{
 	".git",
 	"node_modules",
@@ -16,42 +15,45 @@ var defaultIgnored = []string{
 	"build",
 }
 
-// Rules holds the complete set of ignore patterns for the current project.
 type Rules struct {
-	exact    map[string]bool // fast path: literal names like ".DS_Store"
-	patterns []string        // glob patterns like "*.exe", "vendor"
+	exact    map[string]bool
+	patterns []string
 }
 
-// Load reads both .gitignore and .aiignore from the current directory
-// and merges them with the hardcoded defaults. It never fails — missing
-// files are silently skipped.
 func Load() *Rules {
 	r := &Rules{
 		exact: make(map[string]bool),
 	}
-
 	for _, name := range defaultIgnored {
 		r.exact[name] = true
 	}
-
 	r.loadIgnoreFile(".gitignore")
 	r.loadIgnoreFile(".aiignore")
-
 	return r
 }
 
-// ShouldIgnore reports whether the given file or directory name
-// matches any active ignore rule — exact names or glob patterns.
-func (r *Rules) ShouldIgnore(name string) bool {
-	// Fast path: exact match
-	if r.exact[name] {
+// ShouldIgnore reports whether the entry should be excluded.
+// path is the full relative path (e.g. "internal/ignore/ignore.go").
+// name is the bare filename (e.g. "ignore.go").
+func (r *Rules) ShouldIgnore(path, name string) bool {
+	path = filepath.ToSlash(path)
+
+	// 1. Exact match on bare name or full path
+	if r.exact[name] || r.exact[path] {
 		return true
 	}
 
-	// Pattern match: e.g. *.exe, vendor, .vscode
+	// 2. Exact entry used as a path prefix
+	//    "internal/ignore" should match "internal/ignore/ignore.go"
+	for entry := range r.exact {
+		if strings.HasPrefix(path, entry+"/") {
+			return true
+		}
+	}
+
+	// 3. Glob pattern against name and full path
 	for _, pattern := range r.patterns {
-		matched, err := filepath.Match(pattern, name)
-		if err == nil && matched {
+		if matchPattern(pattern, name) || matchPattern(pattern, path) {
 			return true
 		}
 	}
@@ -59,10 +61,8 @@ func (r *Rules) ShouldIgnore(name string) bool {
 	return false
 }
 
-// loadIgnoreFile parses any .gitignore-style file and adds its entries to the rules.
-// It silently returns if the file does not exist or cannot be read.
-func (r *Rules) loadIgnoreFile(path string) {
-	file, err := os.Open(path)
+func (r *Rules) loadIgnoreFile(filePath string) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return
 	}
@@ -71,16 +71,10 @@ func (r *Rules) loadIgnoreFile(path string) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-
-		// Skip blank lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
-		// Normalize: strip leading/trailing slashes
-		line = strings.Trim(line, "/")
-
-		// Use fast-path exact map for plain names, patterns slice for globs
+		line = strings.Trim(filepath.ToSlash(line), "/")
 		if isPattern(line) {
 			r.patterns = append(r.patterns, line)
 		} else {
@@ -89,9 +83,16 @@ func (r *Rules) loadIgnoreFile(path string) {
 	}
 }
 
-// isPattern reports whether a line requires glob matching.
-// Plain names (e.g. "vendor", ".DS_Store") go into the exact map;
-// anything with *, ?, or [ goes into the patterns slice.
+func matchPattern(pattern, target string) bool {
+	if matched, err := filepath.Match(pattern, target); err == nil && matched {
+		return true
+	}
+	if strings.HasPrefix(target, pattern+"/") {
+		return true
+	}
+	return false
+}
+
 func isPattern(s string) bool {
 	return strings.ContainsAny(s, "*?[")
 }
