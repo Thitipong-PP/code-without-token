@@ -20,9 +20,13 @@ func Walk(root string, rules *ignore.Rules) (string, error) {
 			return err
 		}
 
-		// Skip ignored directories entirely (don't descend into them)
-		if d.IsDir() && rules.ShouldIgnore(d.Name()) {
-			return filepath.SkipDir
+		// Skip ignored entries — directories are skipped entirely (no descend),
+		// files are simply omitted from output.
+		if rules.ShouldIgnore(path, d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		depth := strings.Count(path, string(os.PathSeparator))
