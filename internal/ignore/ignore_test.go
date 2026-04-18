@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	original, err := os.Getwd()
@@ -32,260 +36,503 @@ func writeFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-// shouldIgnore is a test helper that calls ShouldIgnore with name as both path and name
-// for cases where we only care about bare-name matching.
-func shouldIgnoreName(r *Rules, name string) bool {
+// si is shorthand for ShouldIgnore with explicit path and name (distinct values).
+func si(r *Rules, path, name string) bool {
+	return r.ShouldIgnore(path, name)
+}
+
+// siName calls ShouldIgnore with name as both path and name — only appropriate
+// for bare-name tests where path-prefix matching is not under test.
+func siName(r *Rules, name string) bool {
 	return r.ShouldIgnore(name, name)
 }
 
-// --- Defaults ---
+// ──────────────────────────────────────────────
+// Group 1 – Built-in defaults
+// ──────────────────────────────────────────────
 
-func TestDefaultsAlwaysIgnored(t *testing.T) {
+// Every entry in defaultIgnored must be ignored with no ignore files present.
+func TestDefaults_AllIgnored(t *testing.T) {
 	tempDir(t)
 	r := Load()
 	for _, name := range defaultIgnored {
-		if !shouldIgnoreName(r, name) {
-			t.Errorf("expected %q to be ignored by default", name)
+		if !siName(r, name) {
+			t.Errorf("default %q should be ignored", name)
 		}
 	}
 }
 
-func TestNoIgnoreFilesPresent(t *testing.T) {
+// Default entries must work as path prefixes so nested children are excluded.
+// e.g. "node_modules/express/index.js" must be excluded because "node_modules"
+// is a default exact entry and prefix-matching applies to all exact entries.
+func TestDefaults_AsPathPrefix(t *testing.T) {
 	tempDir(t)
 	r := Load()
-	if !shouldIgnoreName(r, ".git") {
-		t.Error("expected .git to be ignored")
+
+	cases := []struct{ path, name string }{
+		{"node_modules/express/index.js", "index.js"},
+		{"node_modules/lodash/lodash.js", "lodash.js"},
+		{".git/HEAD", "HEAD"},
+		{".git/refs/heads/main", "main"},
+		{"dist/bundle.js", "bundle.js"},
+		{"build/output.bin", "output.bin"},
+		{".next/cache/data.json", "data.json"},
 	}
-	if shouldIgnoreName(r, "main.go") {
-		t.Error("main.go should not be ignored")
+	for _, c := range cases {
+		if !si(r, c.path, c.name) {
+			t.Errorf("expected path %q (name %q) to be ignored via default prefix rule", c.path, c.name)
+		}
 	}
 }
 
-// --- Exact names ---
+// Non-default names must not be ignored when no ignore files are present.
+func TestDefaults_NonDefaultNotIgnored(t *testing.T) {
+	tempDir(t)
+	r := Load()
+	for _, name := range []string{"main.go", "readme.md", "go.mod", "internal", "src"} {
+		if siName(r, name) {
+			t.Errorf("%q should not be ignored by default", name)
+		}
+	}
+}
 
-func TestExactNameFromGitignore(t *testing.T) {
+// ──────────────────────────────────────────────
+// Group 2 – Exact name matching
+// ──────────────────────────────────────────────
+
+// Bare names from .gitignore must be matched by name alone.
+func TestExactName_GitIgnore(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "ai-context\n.DS_Store\nThumbs.db\n")
 	r := Load()
 	for _, name := range []string{"ai-context", ".DS_Store", "Thumbs.db"} {
-		if !shouldIgnoreName(r, name) {
-			t.Errorf("expected %q to be ignored", name)
+		if !siName(r, name) {
+			t.Errorf("expected %q to be ignored via .gitignore exact name", name)
 		}
 	}
 }
 
-func TestExactNameFromAiignore(t *testing.T) {
+// Bare names from .aiignore must be matched by name alone.
+func TestExactName_AIIgnore(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".aiignore", "secrets\nlogs\n")
 	r := Load()
 	for _, name := range []string{"secrets", "logs"} {
-		if !shouldIgnoreName(r, name) {
-			t.Errorf("expected %q to be ignored via .aiignore", name)
+		if !siName(r, name) {
+			t.Errorf("expected %q to be ignored via .aiignore exact name", name)
 		}
 	}
 }
 
-// --- Path-based matching (the new behaviour) ---
+// Exact name must not cause false positives on unrelated names.
+func TestExactName_NoFalsePositive(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "vendor\n")
+	r := Load()
+	for _, name := range []string{"vendor2", "pre-vendor", "main.go"} {
+		if siName(r, name) {
+			t.Errorf("%q should not be matched by exact rule 'vendor'", name)
+		}
+	}
+}
 
-func TestExactPathFromGitignore(t *testing.T) {
+// ──────────────────────────────────────────────
+// Group 3 – Path-based exact matching
+// ──────────────────────────────────────────────
+
+// A path rule must match when the full path is provided.
+func TestExactPath_FullPathMatches(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "internal/ignore\n")
 	r := Load()
-
-	// Full path should match
-	if !r.ShouldIgnore("internal/ignore", "ignore") {
-		t.Error("expected internal/ignore to be ignored by path")
-	}
-	// Bare name alone should NOT match — the rule is path-specific
-	if r.ShouldIgnore("ignore", "ignore") {
-		t.Error("bare name 'ignore' should not match a path-specific rule")
+	if !si(r, "internal/ignore", "ignore") {
+		t.Error("full path 'internal/ignore' should be ignored")
 	}
 }
 
-func TestPathPrefixMatchesChildren(t *testing.T) {
+// A path rule must NOT match the bare name alone (path-specific, not name-global).
+func TestExactPath_BareNameDoesNotMatch(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "internal/ignore\n")
 	r := Load()
-
-	// Files inside the ignored path should also be ignored
-	if !r.ShouldIgnore("internal/ignore/ignore.go", "ignore.go") {
-		t.Error("expected internal/ignore/ignore.go to be ignored (prefix match)")
-	}
-	if !r.ShouldIgnore("internal/ignore/ignore_test.go", "ignore_test.go") {
-		t.Error("expected internal/ignore/ignore_test.go to be ignored (prefix match)")
+	// The bare name "ignore" with path "ignore" must NOT be excluded.
+	if si(r, "ignore", "ignore") {
+		t.Error("bare name 'ignore' should not match path-specific rule 'internal/ignore'")
 	}
 }
 
-func TestGlobPathPattern(t *testing.T) {
+// A path rule must match children via prefix expansion.
+func TestExactPath_PrefixMatchesChildren(t *testing.T) {
 	dir := tempDir(t)
-	writeFile(t, dir, ".gitignore", "internal/ignore/*\n")
+	writeFile(t, dir, ".gitignore", "internal/ignore\n")
 	r := Load()
-
-	if !r.ShouldIgnore("internal/ignore/ignore.go", "ignore.go") {
-		t.Error("expected internal/ignore/ignore.go to match internal/ignore/*")
+	cases := []struct{ path, name string }{
+		{"internal/ignore/ignore.go", "ignore.go"},
+		{"internal/ignore/ignore_test.go", "ignore_test.go"},
+		{"internal/ignore/sub/deep.go", "deep.go"},
 	}
-	// Sibling directory should NOT match
-	if r.ShouldIgnore("internal/walker/walker.go", "walker.go") {
-		t.Error("internal/walker/walker.go should not match internal/ignore/*")
+	for _, c := range cases {
+		if !si(r, c.path, c.name) {
+			t.Errorf("path %q should be excluded by prefix rule 'internal/ignore'", c.path)
+		}
 	}
 }
 
-// --- Glob patterns (name-based) ---
+// A path rule must not spill over into sibling directories.
+func TestExactPath_SiblingNotAffected(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore\n")
+	r := Load()
+	siblings := []struct{ path, name string }{
+		{"internal/walker/walker.go", "walker.go"},
+		{"internal/builder/builder.go", "builder.go"},
+		{"readme.md", "readme.md"},
+	}
+	for _, c := range siblings {
+		if si(r, c.path, c.name) {
+			t.Errorf("sibling path %q should not be affected by rule 'internal/ignore'", c.path)
+		}
+	}
+}
 
-func TestGlobExePattern(t *testing.T) {
+// A path rule from .aiignore must also apply prefix matching to its children.
+func TestExactPath_AIIgnorePrefixMatchesChildren(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".aiignore", "internal/secret\n")
+	r := Load()
+	if !si(r, "internal/secret/key.go", "key.go") {
+		t.Error("child of .aiignore path rule should be excluded")
+	}
+	if si(r, "internal/public/api.go", "api.go") {
+		t.Error("sibling should not be affected by .aiignore path rule")
+	}
+}
+
+// ──────────────────────────────────────────────
+// Group 4 – Glob pattern matching
+// ──────────────────────────────────────────────
+
+// Standard extension globs must match the intended file types.
+func TestGlob_ExtensionPatterns(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "*.exe\n*.exe~\n*.dll\n*.so\n*.dylib\n")
 	r := Load()
 
 	hits := []string{"app.exe", "app.exe~", "lib.dll", "lib.so", "lib.dylib"}
 	for _, name := range hits {
-		if !shouldIgnoreName(r, name) {
+		if !siName(r, name) {
 			t.Errorf("expected %q to be ignored by glob", name)
 		}
 	}
-	misses := []string{"main.go", "readme.md", "app.exe.bak"}
+	misses := []string{"main.go", "readme.md", "app.exe.bak", "libso", "dll"}
 	for _, name := range misses {
-		if shouldIgnoreName(r, name) {
-			t.Errorf("%q should NOT be ignored", name)
+		if siName(r, name) {
+			t.Errorf("%q should NOT be ignored by extension glob", name)
 		}
 	}
 }
 
-func TestGlobFromAiignore(t *testing.T) {
+// The ? wildcard must match exactly one character.
+func TestGlob_QuestionMarkWildcard(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "file?.go\n")
+	r := Load()
+	if !siName(r, "file1.go") {
+		t.Error("file1.go should match file?.go")
+	}
+	if !siName(r, "fileA.go") {
+		t.Error("fileA.go should match file?.go")
+	}
+	// Two characters in place of ? must not match.
+	if siName(r, "file12.go") {
+		t.Error("file12.go should not match file?.go")
+	}
+}
+
+// The [bracket] wildcard must match the character set.
+func TestGlob_BracketWildcard(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "file[0-9].go\n")
+	r := Load()
+	if !siName(r, "file0.go") {
+		t.Error("file0.go should match file[0-9].go")
+	}
+	if !siName(r, "file9.go") {
+		t.Error("file9.go should match file[0-9].go")
+	}
+	if siName(r, "fileA.go") {
+		t.Error("fileA.go should not match file[0-9].go")
+	}
+}
+
+// A glob path pattern must match files under the specified directory.
+func TestGlob_PathPattern(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore/*\n")
+	r := Load()
+	if !si(r, "internal/ignore/ignore.go", "ignore.go") {
+		t.Error("internal/ignore/ignore.go should match internal/ignore/*")
+	}
+	if !si(r, "internal/ignore/ignore_test.go", "ignore_test.go") {
+		t.Error("internal/ignore/ignore_test.go should match internal/ignore/*")
+	}
+}
+
+// A glob path pattern must not match files in sibling directories.
+func TestGlob_PathPatternNoSiblingSpill(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "internal/ignore/*\n")
+	r := Load()
+	if si(r, "internal/walker/walker.go", "walker.go") {
+		t.Error("internal/walker/walker.go should not match internal/ignore/*")
+	}
+}
+
+// A glob from .aiignore must work identically to one from .gitignore.
+func TestGlob_AIIgnore(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".aiignore", "*.secret\n*.key\n")
 	r := Load()
-
-	if !shouldIgnoreName(r, "prod.secret") {
-		t.Error("expected prod.secret to be ignored")
+	if !siName(r, "prod.secret") {
+		t.Error("prod.secret should be ignored via .aiignore glob")
 	}
-	if !shouldIgnoreName(r, "id_rsa.key") {
-		t.Error("expected id_rsa.key to be ignored")
+	if !siName(r, "id_rsa.key") {
+		t.Error("id_rsa.key should be ignored via .aiignore glob")
 	}
-	if shouldIgnoreName(r, "main.go") {
+	if siName(r, "main.go") {
 		t.Error("main.go should not be ignored")
 	}
 }
 
-// --- Directory-style entries ---
+// ──────────────────────────────────────────────
+// Group 5 – loadIgnoreFile parsing
+// ──────────────────────────────────────────────
 
-func TestDirectoryEntryStripsSlash(t *testing.T) {
+// Comment lines (# prefix) must be silently skipped.
+func TestParsing_CommentsSkipped(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "# this is a comment\n#vendor\n.DS_Store\n")
+	r := Load()
+	if siName(r, "# this is a comment") {
+		t.Error("comment text should not become a rule")
+	}
+	if siName(r, "#vendor") {
+		t.Error("commented-out entry should not become a rule")
+	}
+	if !siName(r, ".DS_Store") {
+		t.Error(".DS_Store should still be ignored")
+	}
+}
+
+// Blank and whitespace-only lines must be silently skipped.
+func TestParsing_BlankAndWhitespaceLinesSkipped(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "\n   \n\t\nvendor\n\n")
+	r := Load()
+	// Whitespace lines must not create phantom rules.
+	if siName(r, "") || siName(r, "   ") || siName(r, "\t") {
+		t.Error("blank/whitespace lines should not produce rules")
+	}
+	if !siName(r, "vendor") {
+		t.Error("vendor should still be ignored")
+	}
+}
+
+// Trailing slashes must be stripped so "vendor/" behaves like "vendor".
+func TestParsing_TrailingSlashStripped(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "vendor/\n.vscode/\n")
 	r := Load()
-
-	if !shouldIgnoreName(r, "vendor") {
-		t.Error("expected vendor/ (normalized) to be ignored")
+	if !siName(r, "vendor") {
+		t.Error("vendor/ should normalise to vendor")
 	}
-	if !shouldIgnoreName(r, ".vscode") {
-		t.Error("expected .vscode/ (normalized) to be ignored")
+	if !siName(r, ".vscode") {
+		t.Error(".vscode/ should normalise to .vscode")
 	}
 }
 
-// --- Merge behaviour ---
-
-func TestBothFilesAreMerged(t *testing.T) {
+// Leading slashes must also be stripped.
+func TestParsing_LeadingSlashStripped(t *testing.T) {
 	dir := tempDir(t)
-	writeFile(t, dir, ".gitignore", "vendor/\n*.exe\n")
-	writeFile(t, dir, ".aiignore", "secrets\n*.key\n")
+	writeFile(t, dir, ".gitignore", "/vendor\n")
 	r := Load()
-
-	if !shouldIgnoreName(r, "vendor") {
-		t.Error("expected vendor from .gitignore")
-	}
-	if !shouldIgnoreName(r, "app.exe") {
-		t.Error("expected *.exe glob from .gitignore")
-	}
-	if !shouldIgnoreName(r, "secrets") {
-		t.Error("expected secrets from .aiignore")
-	}
-	if !shouldIgnoreName(r, "prod.key") {
-		t.Error("expected *.key glob from .aiignore")
+	if !siName(r, "vendor") {
+		t.Error("/vendor should normalise to vendor")
 	}
 }
 
-func TestOnlyGitignorePresent(t *testing.T) {
+// Both leading and trailing slashes must be stripped together.
+func TestParsing_BothSlashesStripped(t *testing.T) {
 	dir := tempDir(t)
-	writeFile(t, dir, ".gitignore", "vendor\n")
+	writeFile(t, dir, ".gitignore", "/vendor/\n")
 	r := Load()
-	if !shouldIgnoreName(r, "vendor") {
-		t.Error("expected vendor")
-	}
-	if shouldIgnoreName(r, "secrets") {
-		t.Error("secrets should not be ignored")
+	if !siName(r, "vendor") {
+		t.Error("/vendor/ should normalise to vendor")
 	}
 }
 
-func TestOnlyAiignorePresent(t *testing.T) {
-	dir := tempDir(t)
-	writeFile(t, dir, ".aiignore", "secrets\n")
-	r := Load()
-	if !shouldIgnoreName(r, "secrets") {
-		t.Error("expected secrets")
-	}
-	if shouldIgnoreName(r, "vendor") {
-		t.Error("vendor should not be ignored")
-	}
-}
-
-// --- Parsing edge cases ---
-
-func TestCommentsAndBlankLinesSkipped(t *testing.T) {
-	dir := tempDir(t)
-	writeFile(t, dir, ".gitignore", "# Mac\n\n.DS_Store\n")
-	r := Load()
-	if shouldIgnoreName(r, "# Mac") {
-		t.Error("comment should not be an entry")
-	}
-	if !shouldIgnoreName(r, ".DS_Store") {
-		t.Error("expected .DS_Store")
-	}
-}
-
-func TestDuplicateEntriesAreHarmless(t *testing.T) {
+// Duplicate entries must not cause errors or unexpected behaviour.
+func TestParsing_DuplicateEntriesHarmless(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "vendor\nvendor\n*.exe\n*.exe\n")
 	r := Load()
-	if !shouldIgnoreName(r, "vendor") {
-		t.Error("expected vendor")
+	if !siName(r, "vendor") {
+		t.Error("vendor should be ignored even when listed twice")
 	}
-	if !shouldIgnoreName(r, "app.exe") {
-		t.Error("expected app.exe")
+	if !siName(r, "app.exe") {
+		t.Error("app.exe should be ignored even when pattern listed twice")
 	}
 }
 
-func TestDefaultsNotOverriddenByEmptyFiles(t *testing.T) {
+// Missing ignore files must not cause Load to fail or affect defaults.
+func TestParsing_MissingIgnoreFilesAreSkipped(t *testing.T) {
+	tempDir(t) // fresh dir with no .gitignore or .aiignore
+	r := Load()
+	// Defaults must still be intact.
+	for _, name := range defaultIgnored {
+		if !siName(r, name) {
+			t.Errorf("default %q must survive missing ignore files", name)
+		}
+	}
+}
+
+// Empty ignore files must not disturb defaults or produce spurious rules.
+func TestParsing_EmptyIgnoreFilesHarmless(t *testing.T) {
 	dir := tempDir(t)
 	writeFile(t, dir, ".gitignore", "")
 	writeFile(t, dir, ".aiignore", "")
 	r := Load()
 	for _, name := range defaultIgnored {
-		if !shouldIgnoreName(r, name) {
-			t.Errorf("default %q should still be ignored", name)
+		if !siName(r, name) {
+			t.Errorf("default %q should survive empty ignore files", name)
+		}
+	}
+	if siName(r, "main.go") {
+		t.Error("main.go should not be ignored when files are empty")
+	}
+}
+
+// Only .gitignore present — .aiignore absence must not affect .gitignore rules.
+func TestParsing_OnlyGitIgnorePresent(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "vendor\n")
+	r := Load()
+	if !siName(r, "vendor") {
+		t.Error("vendor from .gitignore should be ignored")
+	}
+	if siName(r, "secrets") {
+		t.Error("secrets should not be ignored when only .gitignore is present")
+	}
+}
+
+// Only .aiignore present — .gitignore absence must not affect .aiignore rules.
+func TestParsing_OnlyAIIgnorePresent(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".aiignore", "secrets\n")
+	r := Load()
+	if !siName(r, "secrets") {
+		t.Error("secrets from .aiignore should be ignored")
+	}
+	if siName(r, "vendor") {
+		t.Error("vendor should not be ignored when only .aiignore is present")
+	}
+}
+
+// Both files present — rules from both must be merged into one Rules set.
+func TestParsing_BothFilesMerged(t *testing.T) {
+	dir := tempDir(t)
+	writeFile(t, dir, ".gitignore", "vendor/\n*.exe\n")
+	writeFile(t, dir, ".aiignore", "secrets\n*.key\n")
+	r := Load()
+	for _, name := range []string{"vendor", "app.exe", "secrets", "prod.key"} {
+		if !siName(r, name) {
+			t.Errorf("%q should be ignored after merging both files", name)
 		}
 	}
 }
 
-// --- isPattern helper ---
+// ──────────────────────────────────────────────
+// Group 6 – isPattern unit tests
+// ──────────────────────────────────────────────
 
 func TestIsPattern(t *testing.T) {
 	cases := []struct {
 		input string
 		want  bool
 	}{
+		// Patterns — contain glob metacharacters
 		{"*.exe", true},
 		{"*.exe~", true},
 		{"file[0].go", true},
+		{"file[0-9].go", true},
 		{"file?.go", true},
 		{"internal/ignore/*", true},
+		{"**/*.go", true},
+		// Non-patterns — no glob metacharacters
 		{"vendor", false},
 		{".DS_Store", false},
 		{"ai-context", false},
 		{"internal/ignore", false},
+		{"build", false},
+		{".git", false},
+		{"", false},
 	}
 	for _, c := range cases {
-		if got := isPattern(c.input); got != c.want {
+		got := isPattern(c.input)
+		if got != c.want {
 			t.Errorf("isPattern(%q) = %v, want %v", c.input, got, c.want)
 		}
+	}
+}
+
+// ──────────────────────────────────────────────
+// Group 7 – matchPattern unit tests
+// ──────────────────────────────────────────────
+
+func TestMatchPattern_StarGlob(t *testing.T) {
+	if !matchPattern("*.go", "main.go") {
+		t.Error("*.go should match main.go")
+	}
+	if matchPattern("*.go", "main.txt") {
+		t.Error("*.go should not match main.txt")
+	}
+}
+
+func TestMatchPattern_QuestionGlob(t *testing.T) {
+	if !matchPattern("file?.go", "file1.go") {
+		t.Error("file?.go should match file1.go")
+	}
+	if matchPattern("file?.go", "file10.go") {
+		t.Error("file?.go should not match file10.go")
+	}
+}
+
+func TestMatchPattern_BracketGlob(t *testing.T) {
+	if !matchPattern("file[0-9].go", "file3.go") {
+		t.Error("file[0-9].go should match file3.go")
+	}
+	if matchPattern("file[0-9].go", "fileA.go") {
+		t.Error("file[0-9].go should not match fileA.go")
+	}
+}
+
+// The prefix branch: matchPattern("a/b", "a/b/c.go") must return true even
+// though filepath.Match("a/b", "a/b/c.go") returns false.
+func TestMatchPattern_PrefixBranch(t *testing.T) {
+	if !matchPattern("vendor/lib", "vendor/lib/a.go") {
+		t.Error("prefix branch: vendor/lib should match vendor/lib/a.go")
+	}
+	if matchPattern("vendor/lib", "vendor/lib2/a.go") {
+		t.Error("prefix branch must not match vendor/lib2/a.go for pattern vendor/lib")
+	}
+}
+
+// matchPattern must not match an unrelated target.
+func TestMatchPattern_NoSpuriousMatch(t *testing.T) {
+	if matchPattern("*.exe", "main.go") {
+		t.Error("*.exe should not match main.go")
+	}
+	if matchPattern("vendor", "pre-vendor") {
+		t.Error("vendor pattern should not match pre-vendor")
 	}
 }
