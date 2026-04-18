@@ -1,0 +1,42 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    # This dynamically names the job in the GitHub UI so you know exactly what is running
+    name: Test / ${{ matrix.os }} / internal/${{ matrix.package }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Keeps all jobs running even if one specific OS/package combo fails
+      fail-fast: false 
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        package: 
+          - builder
+          - cli
+          - content
+          - ignore
+          - output
+          - walker
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.26.1'
+        cache: true
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Run tests for ${{ matrix.package }}
+      # go test works seamlessly across Ubuntu, macOS, and Windows with this syntax
+      run: go test -v ./internal/${{ matrix.package }}
