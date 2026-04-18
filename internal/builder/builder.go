@@ -30,7 +30,8 @@ func Build(cfg cli.Config) (string, error) {
 			"\nCurrently, I am working on this project. I want to: %s.\n",
 			cfg.Task,
 		))
-		sb.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?")
+		sb.WriteString("To avoid any side effects, please analyze this structure and tell me exactly which files you need to see the code from?\n")
+		sb.WriteString("You can use this template to respond: ai-context -include \"file1, file2\"")
 	}
 
 	if len(cfg.Includes) > 0 {
