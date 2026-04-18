@@ -42,3 +42,34 @@ func Walk(root string, rules *ignore.Rules) (string, error) {
 
 	return sb.String(), nil
 }
+
+// ListFiles traverses the directory tree and returns a flat list of file paths,
+// skipping any entry that matches the given ignore rules. Directories are omitted.
+func ListFiles(root string, rules *ignore.Rules) ([]string, error) {
+	var files []string
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if rules.ShouldIgnore(path, d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Only append files, not directories, to the selection list
+		if !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("listing files %q: %w", root, err)
+	}
+
+	return files, nil
+}

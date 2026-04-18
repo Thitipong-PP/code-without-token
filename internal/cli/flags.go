@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Thitipong-PP/code-without-token/internal/ignore"
+	"github.com/Thitipong-PP/code-without-token/internal/walker"
 )
 
 // Config holds all parsed input from the user.
@@ -22,14 +25,7 @@ func Parse() Config {
 
 	flag.Usage = func() {
 		fmt.Println("CODE WITHOUT TOKEN: Generate project context for AI assistance")
-		fmt.Println("\nUsage:")
-		fmt.Println("  ai-context [flags] (or run without flags for Interactive Mode)")
-		fmt.Println("\nExamples:")
-		fmt.Println("  ai-context")
-		fmt.Println("  ai-context -task \"add login api\"")
-		fmt.Println("  ai-context -task \"fix bug\" -include \"main.go,go.mod\"")
-		fmt.Println("\nFlags:")
-		flag.PrintDefaults()
+		// ... existing usage prints ...
 	}
 
 	flag.Parse()
@@ -37,9 +33,44 @@ func Parse() Config {
 	task := strings.TrimSpace(*taskPtr)
 	includesRaw := strings.TrimSpace(*includePtr)
 
-	// Interactive mode: no flags provided at all
-	if task == "" && includesRaw == "" {
-		task = promptTask()
+	// Interactive mode: no flags and no arguments provided at all
+	if task == "" && includesRaw == "" && len(os.Args) == 1 {
+		selected := RunMainMenu()
+
+		switch selected {
+		case "Run Task":
+			// If they only chose to run a task, a task is REQUIRED.
+			task = promptTask(true)
+
+		case "Select Files":
+			rules := ignore.Load()
+			files, err := walker.ListFiles(".", rules)
+			if err != nil {
+				fmt.Printf("Error listing files: %v\n", err)
+				os.Exit(1)
+			}
+
+			if len(files) == 0 {
+				fmt.Println("No selectable files found.")
+				os.Exit(0)
+			}
+
+			selectedFiles := RunFilePicker(files)
+			if len(selectedFiles) == 0 {
+				fmt.Println("No files selected. Exiting...")
+				os.Exit(0)
+			}
+
+			includesRaw = strings.Join(selectedFiles, ",")
+			fmt.Printf("\nSelected %d file(s).\n", len(selectedFiles))
+
+			// Since they have files, the task is now OPTIONAL.
+			task = promptTask(false)
+
+		case "Exit", "":
+			fmt.Println("\nExiting...")
+			os.Exit(0)
+		}
 	}
 
 	return Config{
@@ -49,13 +80,19 @@ func Parse() Config {
 }
 
 // promptTask asks the user interactively for a task description.
-func promptTask() string {
-	fmt.Print("What is your task?: ")
+// If required is true, it forces the user to enter text.
+func promptTask(required bool) string {
+	if required {
+		fmt.Print("What is your task?: ")
+	} else {
+		fmt.Print("What is your task? (Press Enter to skip and just copy files): ")
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
 	task := strings.TrimSpace(input)
 
-	if task == "" {
+	if required && task == "" {
 		fmt.Println("Error: Task cannot be empty.")
 		os.Exit(1)
 	}
